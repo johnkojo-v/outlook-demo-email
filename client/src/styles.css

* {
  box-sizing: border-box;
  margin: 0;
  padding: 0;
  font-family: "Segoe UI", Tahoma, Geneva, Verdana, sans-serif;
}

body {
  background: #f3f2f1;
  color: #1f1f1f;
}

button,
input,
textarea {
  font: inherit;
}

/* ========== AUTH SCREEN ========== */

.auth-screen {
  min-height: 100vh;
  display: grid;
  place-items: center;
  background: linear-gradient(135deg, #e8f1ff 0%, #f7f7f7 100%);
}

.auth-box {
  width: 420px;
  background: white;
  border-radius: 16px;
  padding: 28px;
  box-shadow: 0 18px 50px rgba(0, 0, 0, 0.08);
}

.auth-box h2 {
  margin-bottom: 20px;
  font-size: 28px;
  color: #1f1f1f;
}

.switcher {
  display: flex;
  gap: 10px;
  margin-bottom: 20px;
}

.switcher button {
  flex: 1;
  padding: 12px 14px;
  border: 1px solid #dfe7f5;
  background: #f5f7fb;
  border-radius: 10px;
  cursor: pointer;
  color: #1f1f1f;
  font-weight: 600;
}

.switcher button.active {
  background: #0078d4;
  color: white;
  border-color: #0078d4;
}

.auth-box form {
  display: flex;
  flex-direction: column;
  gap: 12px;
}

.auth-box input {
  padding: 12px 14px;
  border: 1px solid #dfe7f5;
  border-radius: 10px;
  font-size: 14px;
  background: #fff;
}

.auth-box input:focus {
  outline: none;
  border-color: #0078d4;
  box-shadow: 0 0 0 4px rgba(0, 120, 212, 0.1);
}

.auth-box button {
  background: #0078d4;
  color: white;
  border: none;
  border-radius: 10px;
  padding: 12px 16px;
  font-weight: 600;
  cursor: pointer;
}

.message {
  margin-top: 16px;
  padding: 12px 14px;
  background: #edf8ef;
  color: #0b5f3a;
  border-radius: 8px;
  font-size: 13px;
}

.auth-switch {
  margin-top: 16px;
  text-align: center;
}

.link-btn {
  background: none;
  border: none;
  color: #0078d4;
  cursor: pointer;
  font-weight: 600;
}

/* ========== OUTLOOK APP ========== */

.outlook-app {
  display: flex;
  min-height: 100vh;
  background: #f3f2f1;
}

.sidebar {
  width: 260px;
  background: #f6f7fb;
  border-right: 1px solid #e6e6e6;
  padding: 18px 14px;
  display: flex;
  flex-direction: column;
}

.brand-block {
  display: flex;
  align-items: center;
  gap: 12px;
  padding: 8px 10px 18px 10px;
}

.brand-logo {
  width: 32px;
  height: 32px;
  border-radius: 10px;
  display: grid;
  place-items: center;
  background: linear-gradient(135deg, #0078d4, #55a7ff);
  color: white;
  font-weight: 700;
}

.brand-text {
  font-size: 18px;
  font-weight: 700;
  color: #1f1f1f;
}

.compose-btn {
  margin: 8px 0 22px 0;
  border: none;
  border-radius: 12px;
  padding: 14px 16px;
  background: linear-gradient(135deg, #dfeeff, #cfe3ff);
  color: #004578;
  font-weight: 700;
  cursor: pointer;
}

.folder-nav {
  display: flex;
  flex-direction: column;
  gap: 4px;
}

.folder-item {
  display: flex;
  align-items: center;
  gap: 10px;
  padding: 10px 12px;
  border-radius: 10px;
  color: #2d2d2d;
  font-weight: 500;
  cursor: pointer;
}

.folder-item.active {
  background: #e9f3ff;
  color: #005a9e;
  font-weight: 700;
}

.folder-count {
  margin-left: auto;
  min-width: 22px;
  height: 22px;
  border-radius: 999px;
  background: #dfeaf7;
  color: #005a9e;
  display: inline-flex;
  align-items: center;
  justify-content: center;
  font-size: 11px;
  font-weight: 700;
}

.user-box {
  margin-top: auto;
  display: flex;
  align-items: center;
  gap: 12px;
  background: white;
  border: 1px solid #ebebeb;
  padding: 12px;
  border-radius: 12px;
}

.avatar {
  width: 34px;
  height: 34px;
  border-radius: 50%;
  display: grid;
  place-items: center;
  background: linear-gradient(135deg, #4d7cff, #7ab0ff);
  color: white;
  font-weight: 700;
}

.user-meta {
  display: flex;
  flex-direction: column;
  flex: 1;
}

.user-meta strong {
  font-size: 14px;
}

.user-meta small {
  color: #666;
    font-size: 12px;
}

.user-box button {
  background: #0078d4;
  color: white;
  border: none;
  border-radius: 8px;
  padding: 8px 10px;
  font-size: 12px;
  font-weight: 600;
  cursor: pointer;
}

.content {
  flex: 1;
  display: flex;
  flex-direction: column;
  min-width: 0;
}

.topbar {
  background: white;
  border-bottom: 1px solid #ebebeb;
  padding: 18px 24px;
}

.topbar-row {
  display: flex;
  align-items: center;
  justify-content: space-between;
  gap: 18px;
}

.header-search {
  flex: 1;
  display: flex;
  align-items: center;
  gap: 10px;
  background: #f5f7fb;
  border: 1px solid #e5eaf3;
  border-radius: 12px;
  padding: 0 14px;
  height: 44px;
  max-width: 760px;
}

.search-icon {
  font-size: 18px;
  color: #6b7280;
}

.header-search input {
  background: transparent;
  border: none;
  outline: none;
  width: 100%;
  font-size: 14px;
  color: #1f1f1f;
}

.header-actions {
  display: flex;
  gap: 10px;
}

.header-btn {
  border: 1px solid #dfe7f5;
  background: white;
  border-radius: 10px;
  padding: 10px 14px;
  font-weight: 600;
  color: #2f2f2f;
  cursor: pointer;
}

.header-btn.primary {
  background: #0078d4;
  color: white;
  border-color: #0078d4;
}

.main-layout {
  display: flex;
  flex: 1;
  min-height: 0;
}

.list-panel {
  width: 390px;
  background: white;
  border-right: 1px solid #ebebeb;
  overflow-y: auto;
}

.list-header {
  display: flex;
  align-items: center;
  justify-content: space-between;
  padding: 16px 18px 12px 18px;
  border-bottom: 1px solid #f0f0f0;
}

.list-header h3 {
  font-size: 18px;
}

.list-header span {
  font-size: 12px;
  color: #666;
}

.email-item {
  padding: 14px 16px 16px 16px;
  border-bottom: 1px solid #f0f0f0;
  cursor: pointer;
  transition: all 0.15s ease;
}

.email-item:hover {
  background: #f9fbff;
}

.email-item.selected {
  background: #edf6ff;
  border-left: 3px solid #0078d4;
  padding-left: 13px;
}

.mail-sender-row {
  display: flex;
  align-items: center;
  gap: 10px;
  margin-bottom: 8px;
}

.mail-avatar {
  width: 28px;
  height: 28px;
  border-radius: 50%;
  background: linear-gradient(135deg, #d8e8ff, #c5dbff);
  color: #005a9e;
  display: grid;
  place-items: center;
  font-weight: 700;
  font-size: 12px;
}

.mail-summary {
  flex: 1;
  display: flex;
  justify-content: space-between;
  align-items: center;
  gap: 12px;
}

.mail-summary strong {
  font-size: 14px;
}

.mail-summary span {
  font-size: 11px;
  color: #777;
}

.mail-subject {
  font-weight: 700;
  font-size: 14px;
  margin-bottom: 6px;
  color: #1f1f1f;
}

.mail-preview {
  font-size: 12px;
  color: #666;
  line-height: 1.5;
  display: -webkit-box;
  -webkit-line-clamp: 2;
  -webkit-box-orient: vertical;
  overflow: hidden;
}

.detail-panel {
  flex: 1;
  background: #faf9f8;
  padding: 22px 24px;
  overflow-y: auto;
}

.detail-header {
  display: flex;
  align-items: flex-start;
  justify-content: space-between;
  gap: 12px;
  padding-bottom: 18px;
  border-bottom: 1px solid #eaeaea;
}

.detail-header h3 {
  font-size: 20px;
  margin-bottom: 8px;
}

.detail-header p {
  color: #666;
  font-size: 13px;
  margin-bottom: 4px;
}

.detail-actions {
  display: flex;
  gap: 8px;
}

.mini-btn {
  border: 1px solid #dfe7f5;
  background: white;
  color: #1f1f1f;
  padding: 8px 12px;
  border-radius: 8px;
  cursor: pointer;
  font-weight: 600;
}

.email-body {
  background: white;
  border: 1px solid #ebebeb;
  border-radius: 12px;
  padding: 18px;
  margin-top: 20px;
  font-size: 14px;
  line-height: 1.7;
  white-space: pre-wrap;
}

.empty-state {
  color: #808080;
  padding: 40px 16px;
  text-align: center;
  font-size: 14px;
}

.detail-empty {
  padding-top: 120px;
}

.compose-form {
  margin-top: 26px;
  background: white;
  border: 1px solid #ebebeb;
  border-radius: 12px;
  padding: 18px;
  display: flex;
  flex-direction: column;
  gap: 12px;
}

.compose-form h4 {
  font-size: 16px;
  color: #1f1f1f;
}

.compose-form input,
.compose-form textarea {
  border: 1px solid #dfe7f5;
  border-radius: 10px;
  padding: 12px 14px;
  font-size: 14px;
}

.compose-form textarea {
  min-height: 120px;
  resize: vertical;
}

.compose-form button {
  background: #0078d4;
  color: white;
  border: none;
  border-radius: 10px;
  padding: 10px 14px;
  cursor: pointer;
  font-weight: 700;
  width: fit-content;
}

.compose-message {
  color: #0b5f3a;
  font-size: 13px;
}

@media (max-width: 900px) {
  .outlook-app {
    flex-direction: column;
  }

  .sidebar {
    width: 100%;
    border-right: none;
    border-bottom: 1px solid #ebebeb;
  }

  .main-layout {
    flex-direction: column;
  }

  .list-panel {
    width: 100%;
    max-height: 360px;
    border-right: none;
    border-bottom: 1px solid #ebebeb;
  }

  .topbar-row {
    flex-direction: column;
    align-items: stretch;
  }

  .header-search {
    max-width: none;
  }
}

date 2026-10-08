@@ -1,0 +1,323 @@
+import { useEffect, useState } from "react";
+import axios from "axios";
+
+const API = "http://localhost:5000/api";
+
+export default function Mail({ token, user, logout }) {
+  const [inbox, setInbox] = useState([]);
+  const [selectedEmail, setSelectedEmail] = useState(null);
+  const [search, setSearch] = useState("");
+  const [compose, setCompose] = useState({
+    to: "",
+    subject: "",
+    body: "",
+  });
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    loadInbox();
+  }, []);
+
+  function loadInbox() {
+    axios
+      .get(`${API}/inbox`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      .then((res) => setInbox(res.data.emails))
+      .catch((err) => console.error(err));
+  }
+
+  function handleSendEmail(e) {
+    e.preventDefault();
+
+    axios
+      .post(`${API}/send`, compose, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      .then(() => {
+        setCompose({ to: "", subject: "", body: "" });
+        setMessage("Email sent successfully");
+        loadInbox();
+        setTimeout(() => setMessage(""), 3000);
+      })
+      .catch((err) => {
+        setMessage(err.response?.data?.message || "Failed to send email");
+      });
+  }
+
+  function openEmail(emailId) {
+    axios
+      .get(`${API}/email/${emailId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      .then((res) => {
+        setSelectedEmail(res.data.email);
+        loadInbox();
+      })
+      .catch((err) => console.error(err));
+  }
+
+  const filteredEmails = inbox.filter((email) => {
+    const text = `${email.sender_name} ${email.subject} ${email.body}`.toLowerCase();
+    return text.includes(search.toLowerCase());
+  });
+
+  return (
+    <div className="outlook-app">
+      <aside className="sidebar">
+        <div className="brand-block">
+          <div className="brand-logo">O</div>
+          <div className="brand-text">Outlook</div>
+        </div>
+
+        <button className="compose-btn">✎ New mail</button>
+
+        <nav className="folder-nav">
+          <div className="folder-item active">
+            <span>📥</span>
+            <span>Inbox</span>
+            <span className="folder-count">{inbox.length}</span>
+          </div>
+          <div className="folder-item">
+            <span>📤</span>
+            <span>Sent</span>
+          </div>
+          <div className="folder-item">
+            <span>📝</span>
+            <span>Drafts</span>
+          </div>
+          <div className="folder-item">
+            <span>🗂️</span>
+            <span>Archive</span>
+          </div>
+          <div className="folder-item">
+            <span>🗑️</span>
+            <span>Trash</span>
+          </div>
+        </nav>
+
+        <div className="user-box">
+          <div className="avatar">{user.name.charAt(0).toUpperCase()}</div>
+          <div className="user-meta">
+            <strong>{user.name}</strong>
+            <small>{user.email}</small>
+          </div>
+          <button onClick={logout}>Logout</button>
+        </div>
+      </aside>
+
+      <main className="content">
+        <header className="topbar">
+          <div className="topbar-row">
+            <div className="header-search">
+              <span className="search-icon">⌕</span>
+              <input
+                type="text"
+                placeholder="Search mail and people"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+
+            <div className="header-actions">
+              <button className="header-btn">Filter</button>
+              <button className="header-btn primary">Refresh</button>
+            </div>
+          </div>
+        </header>
+
+        <div className="main-layout">
+          <section className="list-panel">
+            <div className="list-header">
+              <h3>Inbox</h3>
+              <span>{filteredEmails.length} items</span>
+            </div>
+
+            {filteredEmails.length === 0 ? (
+              <div className="empty-state">No emails match your search</div>
+            ) : (
+              filteredEmails.map((email) => (
+                <div
+                  key={email.id}
+                  className={`email-item ${selectedEmail?.id === email.id ? "selected" : ""}`}
+                  onClick={() => openEmail(email.id)}
+                >
+                  <div className="mail-sender-row">
+                    <div className="mail-avatar">{email.sender_name.charAt(0).toUpperCase()}</div>
+                    <div className="mail-summary">
+                      <strong>{email.sender_name}</strong>
+                      <span>{new Date(email.created_at).toLocaleDateString()}</span>
+                    </div>
+                  </div>
+
+                  <div className="mail-subject">{email.subject}</div>
+                  <div className="mail-preview">{email.body}</div>
+                </div>
+              ))
+            )}
+          </section>
+
+          <section className="detail-panel">
+            {selectedEmail ? (
+              <>
+                <div className="detail-header">
+                  <div>
+                    <h3>{selectedEmail.subject}</h3>
+                    <p>
+                      From: {selectedEmail.sender_name} ({selectedEmail.sender_email})
+                    </p>
+                    <p>
+                      To: {selectedEmail.receiver_name} ({selectedEmail.receiver_email})
+                    </p>
+                  </div>
+
+                  <div className="detail-actions">
+                    <button className="mini-btn">Reply</button>
+                    <button className="mini-btn">Forward</button>
+                  </div>
+                </div>
+
+                <div className="email-body">{selectedEmail.body}</div>
+              </>
+            ) : (
+              <div className="empty-state detail-empty">Select an email to read</div>
+            )}
+
+            <form onSubmit={handleSendEmail} className="compose-form">
+              <h4>Send Email</h4>
+              <input
+                type="text"
+                placeholder="Recipient email"
+                value={compose.to}
+                onChange={(e) => setCompose({ ...compose, to: e.target.value })}
+              />
+              <input
+                type="text"
+                placeholder="Subject"
+                value={compose.subject}
+                onChange={(e) => setCompose({ ...compose, subject: e.target.value })}
+              />
+              <textarea
+                placeholder="Write your email..."
+                value={compose.body}
+                onChange={(e) => setCompose({ ...compose, body: e.target.value })}
+              />
+              <button type="submit">Send</button>
+              {message && <p className="compose-message">{message}</p>}
+            </form>
+          </section>
+        </div>
+      </main>
+    </div>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
