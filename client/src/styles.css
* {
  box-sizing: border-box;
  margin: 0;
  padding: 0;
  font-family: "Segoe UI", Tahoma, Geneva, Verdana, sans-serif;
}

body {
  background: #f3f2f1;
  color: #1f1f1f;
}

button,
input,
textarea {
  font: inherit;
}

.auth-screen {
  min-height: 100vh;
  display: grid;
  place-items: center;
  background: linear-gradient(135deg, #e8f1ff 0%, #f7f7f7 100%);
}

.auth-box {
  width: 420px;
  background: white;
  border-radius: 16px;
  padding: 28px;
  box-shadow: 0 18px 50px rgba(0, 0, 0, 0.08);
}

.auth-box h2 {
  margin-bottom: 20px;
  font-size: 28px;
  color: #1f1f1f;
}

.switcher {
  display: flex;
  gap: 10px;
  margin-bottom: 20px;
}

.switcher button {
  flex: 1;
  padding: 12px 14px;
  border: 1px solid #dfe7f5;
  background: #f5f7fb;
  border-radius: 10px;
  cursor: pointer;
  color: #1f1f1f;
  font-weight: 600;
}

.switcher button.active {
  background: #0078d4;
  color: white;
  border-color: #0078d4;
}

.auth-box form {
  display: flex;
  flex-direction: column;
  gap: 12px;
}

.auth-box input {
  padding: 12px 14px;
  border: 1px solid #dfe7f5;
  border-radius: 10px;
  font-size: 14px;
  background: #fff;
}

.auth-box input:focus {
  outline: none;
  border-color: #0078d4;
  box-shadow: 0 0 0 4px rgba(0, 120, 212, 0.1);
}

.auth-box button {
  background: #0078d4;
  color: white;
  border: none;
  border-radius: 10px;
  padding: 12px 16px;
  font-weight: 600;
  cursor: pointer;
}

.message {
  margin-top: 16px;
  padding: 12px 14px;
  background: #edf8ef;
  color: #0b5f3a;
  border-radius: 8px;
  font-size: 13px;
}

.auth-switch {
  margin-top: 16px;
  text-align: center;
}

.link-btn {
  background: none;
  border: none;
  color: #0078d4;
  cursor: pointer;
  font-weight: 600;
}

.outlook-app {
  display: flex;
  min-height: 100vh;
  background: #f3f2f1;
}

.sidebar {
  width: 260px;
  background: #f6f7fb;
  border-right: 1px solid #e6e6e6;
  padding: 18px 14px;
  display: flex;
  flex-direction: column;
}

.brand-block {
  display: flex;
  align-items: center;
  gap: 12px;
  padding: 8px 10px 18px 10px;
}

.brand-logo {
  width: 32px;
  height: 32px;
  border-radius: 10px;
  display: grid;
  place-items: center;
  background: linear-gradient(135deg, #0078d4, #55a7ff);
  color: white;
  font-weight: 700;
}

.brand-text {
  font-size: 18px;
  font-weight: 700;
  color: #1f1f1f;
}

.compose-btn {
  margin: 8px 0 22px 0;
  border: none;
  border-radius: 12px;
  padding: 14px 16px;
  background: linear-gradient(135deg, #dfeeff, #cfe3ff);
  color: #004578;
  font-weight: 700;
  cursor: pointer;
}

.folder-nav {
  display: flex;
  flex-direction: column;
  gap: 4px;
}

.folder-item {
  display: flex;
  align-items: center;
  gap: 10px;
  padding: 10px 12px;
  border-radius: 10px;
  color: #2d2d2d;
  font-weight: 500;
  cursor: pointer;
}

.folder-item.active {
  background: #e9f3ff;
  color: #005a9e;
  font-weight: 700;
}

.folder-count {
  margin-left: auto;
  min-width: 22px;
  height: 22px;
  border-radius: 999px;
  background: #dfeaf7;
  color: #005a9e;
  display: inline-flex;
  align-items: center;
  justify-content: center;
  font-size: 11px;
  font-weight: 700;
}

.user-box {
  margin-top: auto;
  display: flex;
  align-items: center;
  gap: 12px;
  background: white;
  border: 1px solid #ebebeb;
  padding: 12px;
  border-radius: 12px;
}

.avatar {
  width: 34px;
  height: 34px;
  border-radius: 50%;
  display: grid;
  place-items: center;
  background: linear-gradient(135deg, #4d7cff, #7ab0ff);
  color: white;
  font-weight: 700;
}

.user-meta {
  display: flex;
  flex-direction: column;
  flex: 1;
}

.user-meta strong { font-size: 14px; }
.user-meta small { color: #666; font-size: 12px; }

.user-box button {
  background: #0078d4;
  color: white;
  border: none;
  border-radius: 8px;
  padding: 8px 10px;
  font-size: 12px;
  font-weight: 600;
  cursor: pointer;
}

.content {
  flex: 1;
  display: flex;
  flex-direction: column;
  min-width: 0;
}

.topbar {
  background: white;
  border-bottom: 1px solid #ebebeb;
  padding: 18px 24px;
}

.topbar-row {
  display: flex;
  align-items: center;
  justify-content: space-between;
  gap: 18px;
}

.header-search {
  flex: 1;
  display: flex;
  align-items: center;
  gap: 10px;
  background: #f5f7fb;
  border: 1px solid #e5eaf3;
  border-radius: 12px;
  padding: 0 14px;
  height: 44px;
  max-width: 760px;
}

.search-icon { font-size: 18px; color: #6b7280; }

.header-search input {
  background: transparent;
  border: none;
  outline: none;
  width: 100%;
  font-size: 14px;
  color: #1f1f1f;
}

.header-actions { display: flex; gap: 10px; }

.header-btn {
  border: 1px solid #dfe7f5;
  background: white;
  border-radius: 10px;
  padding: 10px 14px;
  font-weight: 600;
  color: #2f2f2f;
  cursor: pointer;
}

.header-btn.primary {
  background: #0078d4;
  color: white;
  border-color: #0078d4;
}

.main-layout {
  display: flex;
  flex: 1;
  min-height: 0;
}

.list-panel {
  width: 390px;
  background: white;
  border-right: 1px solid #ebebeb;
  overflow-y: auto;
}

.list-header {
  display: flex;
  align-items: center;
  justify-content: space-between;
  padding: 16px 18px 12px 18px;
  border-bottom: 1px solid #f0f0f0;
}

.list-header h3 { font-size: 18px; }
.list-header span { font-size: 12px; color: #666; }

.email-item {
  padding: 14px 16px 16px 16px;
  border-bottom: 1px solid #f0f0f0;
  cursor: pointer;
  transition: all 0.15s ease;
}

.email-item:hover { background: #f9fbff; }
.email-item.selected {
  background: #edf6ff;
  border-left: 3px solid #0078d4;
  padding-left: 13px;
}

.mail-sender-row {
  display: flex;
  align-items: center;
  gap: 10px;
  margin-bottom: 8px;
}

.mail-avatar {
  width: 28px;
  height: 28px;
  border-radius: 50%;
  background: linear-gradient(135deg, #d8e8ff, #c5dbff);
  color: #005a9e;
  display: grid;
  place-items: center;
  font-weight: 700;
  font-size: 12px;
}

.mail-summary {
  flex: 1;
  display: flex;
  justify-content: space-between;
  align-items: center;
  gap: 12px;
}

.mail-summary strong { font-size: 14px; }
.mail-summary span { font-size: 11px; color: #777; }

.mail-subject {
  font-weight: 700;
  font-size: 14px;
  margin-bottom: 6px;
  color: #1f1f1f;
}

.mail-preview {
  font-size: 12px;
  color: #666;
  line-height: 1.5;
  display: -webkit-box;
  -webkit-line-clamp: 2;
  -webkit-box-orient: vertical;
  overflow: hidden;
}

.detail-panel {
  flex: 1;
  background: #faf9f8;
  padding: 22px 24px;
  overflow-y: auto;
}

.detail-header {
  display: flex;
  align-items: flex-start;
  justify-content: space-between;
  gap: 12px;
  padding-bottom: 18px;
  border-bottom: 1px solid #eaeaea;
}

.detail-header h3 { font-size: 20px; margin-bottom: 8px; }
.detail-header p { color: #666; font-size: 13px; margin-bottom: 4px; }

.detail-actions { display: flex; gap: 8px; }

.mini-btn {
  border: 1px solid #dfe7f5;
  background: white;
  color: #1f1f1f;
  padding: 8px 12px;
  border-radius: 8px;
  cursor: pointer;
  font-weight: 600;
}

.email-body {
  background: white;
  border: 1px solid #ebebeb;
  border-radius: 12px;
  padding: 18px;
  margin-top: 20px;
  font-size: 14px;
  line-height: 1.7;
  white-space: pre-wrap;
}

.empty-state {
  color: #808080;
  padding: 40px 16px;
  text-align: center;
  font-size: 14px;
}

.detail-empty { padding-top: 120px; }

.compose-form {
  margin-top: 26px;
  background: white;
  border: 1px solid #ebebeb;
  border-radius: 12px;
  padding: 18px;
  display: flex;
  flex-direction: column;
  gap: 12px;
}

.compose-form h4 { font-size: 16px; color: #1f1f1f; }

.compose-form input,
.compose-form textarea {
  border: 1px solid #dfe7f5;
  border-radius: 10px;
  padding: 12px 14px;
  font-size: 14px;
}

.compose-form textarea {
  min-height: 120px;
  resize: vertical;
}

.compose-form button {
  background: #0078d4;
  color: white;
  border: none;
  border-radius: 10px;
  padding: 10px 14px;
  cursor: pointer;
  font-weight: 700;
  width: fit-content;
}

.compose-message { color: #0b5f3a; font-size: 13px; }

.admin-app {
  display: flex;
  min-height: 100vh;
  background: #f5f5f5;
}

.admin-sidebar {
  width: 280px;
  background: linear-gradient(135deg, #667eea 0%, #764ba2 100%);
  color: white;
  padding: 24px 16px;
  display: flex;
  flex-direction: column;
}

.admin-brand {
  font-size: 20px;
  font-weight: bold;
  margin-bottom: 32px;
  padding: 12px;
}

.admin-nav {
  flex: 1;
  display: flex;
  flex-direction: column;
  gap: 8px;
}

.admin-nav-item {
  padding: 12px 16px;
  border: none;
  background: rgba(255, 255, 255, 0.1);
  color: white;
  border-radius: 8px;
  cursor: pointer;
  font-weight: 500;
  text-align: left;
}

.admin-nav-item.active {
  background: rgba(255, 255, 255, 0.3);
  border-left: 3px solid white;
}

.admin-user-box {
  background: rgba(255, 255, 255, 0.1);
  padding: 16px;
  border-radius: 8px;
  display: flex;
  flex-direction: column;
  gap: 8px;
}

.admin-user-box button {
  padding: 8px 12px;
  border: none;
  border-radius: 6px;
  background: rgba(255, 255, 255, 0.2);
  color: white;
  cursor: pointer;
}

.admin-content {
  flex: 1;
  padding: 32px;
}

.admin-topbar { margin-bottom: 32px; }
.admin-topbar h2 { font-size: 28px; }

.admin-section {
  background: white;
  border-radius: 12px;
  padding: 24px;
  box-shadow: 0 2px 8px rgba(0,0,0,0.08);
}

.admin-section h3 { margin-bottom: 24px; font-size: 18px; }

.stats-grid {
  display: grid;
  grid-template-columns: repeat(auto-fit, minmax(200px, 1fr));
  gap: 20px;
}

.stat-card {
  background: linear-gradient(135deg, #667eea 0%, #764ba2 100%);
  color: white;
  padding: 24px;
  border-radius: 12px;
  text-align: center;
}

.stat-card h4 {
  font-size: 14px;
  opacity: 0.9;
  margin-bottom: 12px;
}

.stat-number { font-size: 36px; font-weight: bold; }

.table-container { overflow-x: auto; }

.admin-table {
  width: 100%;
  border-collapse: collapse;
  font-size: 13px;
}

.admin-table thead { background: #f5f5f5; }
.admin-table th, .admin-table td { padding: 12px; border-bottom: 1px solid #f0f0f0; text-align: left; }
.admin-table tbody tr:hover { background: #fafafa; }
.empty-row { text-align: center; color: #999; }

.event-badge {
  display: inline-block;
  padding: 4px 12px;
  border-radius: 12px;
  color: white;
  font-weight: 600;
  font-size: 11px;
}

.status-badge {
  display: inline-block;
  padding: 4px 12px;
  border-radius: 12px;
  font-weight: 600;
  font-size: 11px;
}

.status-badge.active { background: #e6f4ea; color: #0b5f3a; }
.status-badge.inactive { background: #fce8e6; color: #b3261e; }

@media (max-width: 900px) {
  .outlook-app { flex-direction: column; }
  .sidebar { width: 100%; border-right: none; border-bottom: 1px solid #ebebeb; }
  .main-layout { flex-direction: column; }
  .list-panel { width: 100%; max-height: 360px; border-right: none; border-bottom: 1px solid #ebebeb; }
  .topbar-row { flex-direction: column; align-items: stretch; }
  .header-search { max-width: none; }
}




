@@ -1,0 +1,152 @@
+import { useEffect, useState } from "react";
+import axios from "axios";
+
+const API = "http://localhost:5000/api";
+
+export default function Admin({ token, user, logout }) {
+  const [activeTab, setActiveTab] = useState("dashboard");
+  const [stats, setStats] = useState({ totalUsers: 0, totalEmails: 0, totalLogins: 0 });
+  const [logins, setLogins] = useState([]);
+  const [users, setUsers] = useState([]);
+
+  useEffect(() => {
+    loadDashboard();
+  }, []);
+
+  function loadDashboard() {
+    axios.get(`${API}/admin/dashboard`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((res) => setStats(res.data.stats))
+      .catch((err) => console.error(err));
+
+    loadLogins();
+  }
+
+  function loadLogins() {
+    axios.get(`${API}/admin/logins`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((res) => setLogins(res.data.logs))
+      .catch((err) => console.error(err));
+  }
+
+  function loadUsers() {
+    axios.get(`${API}/admin/users`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((res) => setUsers(res.data.users))
+      .catch((err) => console.error(err));
+  }
+
+  function handleTabChange(tab) {
+    setActiveTab(tab);
+    if (tab === "users") loadUsers();
+    if (tab === "logins") loadLogins();
+  }
+
+  const getEventTypeColor = (type) => {
+    if (type === "login") return "#28a745";
+    if (type === "failed_login") return "#dc3545";
+    if (type === "register") return "#0078d4";
+    return "#6c757d";
+  };
+
+  return (
+    <div className="admin-app">
+      <aside className="admin-sidebar">
+        <div className="admin-brand">🛡️ Admin Panel</div>
+
+        <nav className="admin-nav">
+          <button className={`admin-nav-item ${activeTab === "dashboard" ? "active" : ""}`} onClick={() => handleTabChange("dashboard")}>📊 Dashboard</button>
+          <button className={`admin-nav-item ${activeTab === "logins" ? "active" : ""}`} onClick={() => handleTabChange("logins")}>🔐 Login Activity</button>
+          <button className={`admin-nav-item ${activeTab === "users" ? "active" : ""}`} onClick={() => handleTabChange("users")}>👥 Users</button>
+        </nav>
+
+        <div className="admin-user-box">
+          <strong>{user.name}</strong>
+          <small>{user.email}</small>
+          <small>Admin</small>
+          <button onClick={logout}>Logout</button>
+        </div>
+      </aside>
+
+      <main className="admin-content">
+        <header className="admin-topbar"><h2>Admin Panel</h2></header>
+
+        {activeTab === "dashboard" && (
+          <section className="admin-section">
+            <h3>Dashboard</h3>
+            <div className="stats-grid">
+              <div className="stat-card"><h4>Total Users</h4><p className="stat-number">{stats.totalUsers}</p></div>
+              <div className="stat-card"><h4>Total Emails</h4><p className="stat-number">{stats.totalEmails}</p></div>
+              <div className="stat-card"><h4>Total Logins</h4><p className="stat-number">{stats.totalLogins}</p></div>
+            </div>
+          </section>
+        )}
+
+        {activeTab === "logins" && (
+          <section className="admin-section">
+            <h3>Login Activity Log</h3>
+            <div className="table-container">
+              <table className="admin-table">
+                <thead>
+                  <tr>
+                    <th>Email</th>
+                    <th>Event</th>
+                    <th>IP</th>
+                    <th>Time</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {logins.length === 0 ? (
+                    <tr><td colSpan="4" className="empty-row">No login activity yet</td></tr>
+                  ) : (
+                    logins.map((log) => (
+                      <tr key={log.id}>
+                        <td>{log.email}</td>
+                        <td><span className="event-badge" style={{ backgroundColor: getEventTypeColor(log.event_type) }}>{log.event_type}</span></td>
+                        <td>{log.ip_address}</td>
+                        <td>{new Date(log.created_at).toLocaleString()}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
+        {activeTab === "users" && (
+          <section className="admin-section">
+            <h3>Users</h3>
+            <div className="table-container">
+              <table className="admin-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Email</th>
+                    <th>Emails</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {users.length === 0 ? (
+                    <tr><td colSpan="4" className="empty-row">No users yet</td></tr>
+                  ) : (
+                    users.map((u) => (
+                      <tr key={u.id}>
+                        <td>{u.name}</td>
+                        <td>{u.email}</td>
+                        <td>{u.email_count}</td>
+                        <td><span className={`status-badge ${u.has_logged_in ? "active" : "inactive"}`}>{u.has_logged_in ? "Active" : "Inactive"}</span></td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+      </main>
+    </div>
+  );
+}
+
+
+
+

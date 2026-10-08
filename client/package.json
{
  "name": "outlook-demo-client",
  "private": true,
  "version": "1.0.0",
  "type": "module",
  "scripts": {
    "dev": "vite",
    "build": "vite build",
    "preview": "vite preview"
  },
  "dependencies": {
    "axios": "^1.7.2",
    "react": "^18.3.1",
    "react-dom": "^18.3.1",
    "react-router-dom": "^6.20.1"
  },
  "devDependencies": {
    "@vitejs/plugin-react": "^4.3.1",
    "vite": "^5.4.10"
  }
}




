@@ -1,0 +1,170 @@
+server/server.js
+const express = require("express");
+const cors = require("cors");
+const jwt = require("jsonwebtoken");
+const db = require("./db");
+
+const app = express();
+const PORT = 5000;
+const JWT_SECRET = process.env.JWT_SECRET || "outlook-demo-secret-key";
+
+app.use(cors());
+app.use(express.json());
+
+function createToken(user) {
+  return jwt.sign({ id: user.id, email: user.email, name: user.name }, JWT_SECRET, { expiresIn: "7d" });
+}
+
+function authMiddleware(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ message: "Missing token" });
+
+  try {
+    const token = authHeader.split(" ")[1];
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch {
+    return res.status(401).json({ message: "Invalid token" });
+  }
+}
+
+app.post("/api/register", (req, res) => {
+  const { name, email, password } = req.body;
+  if (!name || !email || !password) return res.status(400).json({ message: "All fields are required" });
+
+  db.get("SELECT * FROM users WHERE email = ?", [email], (err, existingUser) => {
+    if (err) return res.status(500).json({ message: "Database error" });
+    if (existingUser) return res.status(409).json({ message: "User already exists" });
+
+    db.run("INSERT INTO users (name, email, password) VALUES (?, ?, ?)", [name, email, password], function (err) {
+      if (err) return res.status(500).json({ message: "Could not create user" });
+      const user = { id: this.lastID, name, email };
+      const token = createToken(user);
+      db.run("INSERT INTO login_logs (user_id, email, event_type, ip_address, user_agent, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))", [user.id, email, "register", req.ip || "unknown", req.headers["user-agent"] || ""]);
+      res.status(201).json({ token, user });
+    });
+  });
+});
+
+app.post("/api/login", (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) return res.status(400).json({ message: "Email and password are required" });
+
+  db.get("SELECT * FROM users WHERE email = ?", [email], (err, user) => {
+    if (err) return res.status(500).json({ message: "Database error" });
+    if (!user) {
+      db.run("INSERT INTO login_logs (email, event_type, ip_address, user_agent, created_at) VALUES (?, ?, ?, ?, datetime('now'))", [email, "failed_login", req.ip || "unknown", req.headers["user-agent"] || ""]);
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    if (password !== user.password) {
+      db.run("INSERT INTO login_logs (user_id, email, event_type, ip_address, user_agent, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))", [user.id, user.email, "failed_login", req.ip || "unknown", req.headers["user-agent"] || ""]);
+      return res.status(401).json({ message: "Incorrect password" });
+    }
+
+    db.run("INSERT INTO login_logs (user_id, email, event_type, ip_address, user_agent, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))", [user.id, user.email, "login", req.ip || "unknown", req.headers["user-agent"] || ""]);
+
+    const safeUser = { id: user.id, name: user.name, email: user.email };
+    const token = createToken(safeUser);
+    res.json({ token, user: safeUser });
+  });
+});
+
+app.get("/api/me", authMiddleware, (req, res) => {
+  db.get("SELECT id, name, email FROM users WHERE id = ?", [req.user.id], (err, user) => {
+    if (err) return res.status(500).json({ message: "Database error" });
+    if (!user) return res.status(404).json({ message: "User not found" });
+    res.json({ user });
+  });
+});
+
+app.get("/api/inbox", authMiddleware, (req, res) => {
+  db.all(`SELECT e.id, e.subject, e.body, e.created_at, e.is_read, s.name AS sender_name, s.email AS sender_email FROM emails e JOIN users s ON s.id = e.sender_id WHERE e.receiver_id = ? ORDER BY e.created_at DESC`, [req.user.id], (err, rows) => {
+    if (err) return res.status(500).json({ message: "Database error" });
+    res.json({ emails: rows || [] });
+  });
+});
+
+app.post("/api/send", authMiddleware, (req, res) => {
+  const { to, subject, body } = req.body;
+  if (!to || !subject || !body) return res.status(400).json({ message: "Recipient, subject, and body are required" });
+
+  db.get("SELECT id FROM users WHERE email = ?", [to], (err, receiver) => {
+    if (err) return res.status(500).json({ message: "Database error" });
+    if (!receiver) return res.status(404).json({ message: "Recipient not found" });
+
+    db.run("INSERT INTO emails (sender_id, receiver_id, subject, body, created_at, is_read) VALUES (?, ?, ?, ?, datetime('now'), 0)", [req.user.id, receiver.id, subject, body], function (err) {
+      if (err) return res.status(500).json({ message: "Failed to send email" });
+      res.status(201).json({ message: "Email sent successfully", emailId: this.lastID });
+    });
+  });
+});
+
+app.get("/api/email/:id", authMiddleware, (req, res) => {
+  db.get(`SELECT e.id, e.subject, e.body, e.created_at, e.is_read, s.id AS sender_id, s.name AS sender_name, s.email AS sender_email, r.id AS receiver_id, r.name AS receiver_name, r.email AS receiver_email FROM emails e JOIN users s ON s.id = e.sender_id JOIN users r ON r.id = e.receiver_id WHERE e.id = ? AND (e.sender_id = ? OR e.receiver_id = ?)`, [req.params.id, req.user.id, req.user.id], (err, email) => {
+    if (err) return res.status(500).json({ message: "Database error" });
+    if (!email) return res.status(404).json({ message: "Email not found" });
+    db.run("UPDATE emails SET is_read = 1 WHERE id = ?", [req.params.id]);
+    res.json({ email });
+  });
+});
+
+app.post("/api/admin/login", (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) return res.status(400).json({ message: "Email and password are required" });
+
+  db.get("SELECT * FROM admin_users WHERE email = ?", [email], (err, admin) => {
+    if (err) return res.status(500).json({ message: "Database error" });
+    if (!admin) return res.status(404).json({ message: "Admin not found" });
+    if (password !== admin.password) return res.status(401).json({ message: "Incorrect password" });
+
+    const token = jwt.sign({ id: admin.id, email: admin.email, name: admin.name, role: "admin" }, JWT_SECRET, { expiresIn: "7d" });
+    res.json({ token, admin: { id: admin.id, name: admin.name, email: admin.email, role: admin.role } });
+  });
+});
+
+app.get("/api/admin/dashboard", authMiddleware, (req, res) => {
+  db.get("SELECT * FROM admin_users WHERE id = ?", [req.user.id], (err, admin) => {
+    if (err) return res.status(500).json({ message: "Database error" });
+    if (!admin) return res.status(403).json({ message: "Forbidden" });
+
+    db.get("SELECT COUNT(*) as total FROM users", (err, userCount) => {
+      db.get("SELECT COUNT(*) as total FROM emails", (err, emailCount) => {
+        db.all("SELECT COUNT(*) as total FROM login_logs WHERE event_type = 'login'", (err, loginCount) => {
+          res.json({ stats: { totalUsers: userCount.total, totalEmails: emailCount.total, totalLogins: loginCount[0].total } });
+        });
+      });
+    });
+  });
+});
+
+app.get("/api/admin/logins", authMiddleware, (req, res) => {
+  db.get("SELECT * FROM admin_users WHERE id = ?", [req.user.id], (err, admin) => {
+    if (err) return res.status(500).json({ message: "Database error" });
+    if (!admin) return res.status(403).json({ message: "Forbidden" });
+
+    db.all("SELECT l.id, l.user_id, l.email, l.event_type, l.ip_address, l.user_agent, l.created_at FROM login_logs l ORDER BY l.created_at DESC LIMIT 200", (err, logs) => {
+      if (err) return res.status(500).json({ message: "Database error" });
+      res.json({ logs: logs || [] });
+    });
+  });
+});
+
+app.get("/api/admin/users", authMiddleware, (req, res) => {
+  db.get("SELECT * FROM admin_users WHERE id = ?", [req.user.id], (err, admin) => {
+    if (err) return res.status(500).json({ message: "Database error" });
+    if (!admin) return res.status(403).json({ message: "Forbidden" });
+
+    db.all(`SELECT u.id, u.name, u.email, COUNT(e.id) as email_count, CASE WHEN EXISTS(SELECT 1 FROM login_logs WHERE user_id = u.id AND event_type = 'login') THEN 1 ELSE 0 END as has_logged_in FROM users u LEFT JOIN emails e ON e.sender_id = u.id OR e.receiver_id = u.id GROUP BY u.id ORDER BY u.id DESC`, (err, users) => {
+      if (err) return res.status(500).json({ message: "Database error" });
+      res.json({ users: users || [] });
+    });
+  });
+});
+
+app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+
+
+
+

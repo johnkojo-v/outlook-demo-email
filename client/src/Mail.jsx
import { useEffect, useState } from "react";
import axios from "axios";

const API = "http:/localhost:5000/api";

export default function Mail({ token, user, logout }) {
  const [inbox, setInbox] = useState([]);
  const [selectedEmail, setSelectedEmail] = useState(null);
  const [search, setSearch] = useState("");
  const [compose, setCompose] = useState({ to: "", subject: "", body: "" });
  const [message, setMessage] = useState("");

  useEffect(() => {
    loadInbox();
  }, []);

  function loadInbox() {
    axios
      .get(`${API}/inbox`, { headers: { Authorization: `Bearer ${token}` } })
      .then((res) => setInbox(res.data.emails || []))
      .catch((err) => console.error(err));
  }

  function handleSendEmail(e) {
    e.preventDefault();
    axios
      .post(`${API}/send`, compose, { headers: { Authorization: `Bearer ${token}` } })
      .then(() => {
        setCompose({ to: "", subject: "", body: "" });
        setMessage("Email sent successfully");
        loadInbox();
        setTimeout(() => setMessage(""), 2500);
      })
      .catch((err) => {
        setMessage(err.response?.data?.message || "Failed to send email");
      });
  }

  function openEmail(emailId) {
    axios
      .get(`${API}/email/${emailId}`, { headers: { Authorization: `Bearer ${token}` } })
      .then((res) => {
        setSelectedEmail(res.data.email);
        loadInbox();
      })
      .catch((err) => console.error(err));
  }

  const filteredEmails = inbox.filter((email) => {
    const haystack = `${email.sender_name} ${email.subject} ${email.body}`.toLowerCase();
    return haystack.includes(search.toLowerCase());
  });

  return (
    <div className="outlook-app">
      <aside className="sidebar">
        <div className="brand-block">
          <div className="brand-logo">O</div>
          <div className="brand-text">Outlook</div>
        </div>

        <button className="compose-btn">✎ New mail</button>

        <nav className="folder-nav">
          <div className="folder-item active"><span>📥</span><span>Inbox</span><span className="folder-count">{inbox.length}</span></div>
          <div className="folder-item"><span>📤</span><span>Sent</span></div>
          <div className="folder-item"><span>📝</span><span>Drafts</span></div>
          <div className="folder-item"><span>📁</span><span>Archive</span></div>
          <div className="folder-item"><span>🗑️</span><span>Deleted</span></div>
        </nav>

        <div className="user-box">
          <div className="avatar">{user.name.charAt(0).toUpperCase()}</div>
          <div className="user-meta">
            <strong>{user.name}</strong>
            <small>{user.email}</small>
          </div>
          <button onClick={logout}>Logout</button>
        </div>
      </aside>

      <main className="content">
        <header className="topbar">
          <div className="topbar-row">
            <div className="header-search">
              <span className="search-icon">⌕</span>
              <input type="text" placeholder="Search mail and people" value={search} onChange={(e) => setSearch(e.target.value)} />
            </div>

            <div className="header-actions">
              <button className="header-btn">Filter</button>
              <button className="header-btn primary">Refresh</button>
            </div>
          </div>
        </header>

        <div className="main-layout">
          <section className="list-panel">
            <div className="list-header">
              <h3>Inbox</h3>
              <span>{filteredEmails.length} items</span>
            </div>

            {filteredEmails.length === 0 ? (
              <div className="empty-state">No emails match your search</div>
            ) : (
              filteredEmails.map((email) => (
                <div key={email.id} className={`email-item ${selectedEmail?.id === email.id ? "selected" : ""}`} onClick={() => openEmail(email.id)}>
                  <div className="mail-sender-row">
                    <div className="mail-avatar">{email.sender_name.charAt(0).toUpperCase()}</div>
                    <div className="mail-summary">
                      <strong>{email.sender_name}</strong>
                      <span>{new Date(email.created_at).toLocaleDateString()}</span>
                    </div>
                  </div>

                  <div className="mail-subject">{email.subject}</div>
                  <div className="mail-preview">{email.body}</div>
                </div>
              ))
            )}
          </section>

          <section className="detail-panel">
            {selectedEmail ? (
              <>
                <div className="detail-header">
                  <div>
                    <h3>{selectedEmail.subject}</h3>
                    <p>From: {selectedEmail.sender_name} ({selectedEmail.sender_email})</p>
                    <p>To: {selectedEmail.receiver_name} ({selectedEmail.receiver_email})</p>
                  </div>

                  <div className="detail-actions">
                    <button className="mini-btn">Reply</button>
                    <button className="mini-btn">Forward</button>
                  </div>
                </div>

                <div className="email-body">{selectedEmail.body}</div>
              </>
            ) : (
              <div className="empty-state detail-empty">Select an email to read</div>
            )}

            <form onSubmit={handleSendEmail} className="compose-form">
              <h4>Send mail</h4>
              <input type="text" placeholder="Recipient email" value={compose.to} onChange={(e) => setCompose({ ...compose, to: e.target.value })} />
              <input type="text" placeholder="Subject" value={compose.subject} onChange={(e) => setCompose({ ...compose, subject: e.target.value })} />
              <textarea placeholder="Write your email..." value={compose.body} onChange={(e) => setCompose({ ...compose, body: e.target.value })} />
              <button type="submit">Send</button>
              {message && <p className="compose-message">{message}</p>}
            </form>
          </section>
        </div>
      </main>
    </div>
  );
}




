@@ -1,0 +1,129 @@
+import { useEffect, useState } from "react";
+import { BrowserRouter, Routes, Route, useNavigate } from "react-router-dom";
+import axios from "axios";
+import Mail from "./Mail";
+import Admin from "./Admin";
+
+const API = "http://localhost:5000/api";
+
+export default function App() {
+  const navigate = useNavigate();
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [token, setToken] = useState(localStorage.getItem("token") || "");
+  const [user, setUser] = useState(null);
+  const [authMode, setAuthMode] = useState("login");
+  const [message, setMessage] = useState("");
+  const [showLoginForm, setShowLoginForm] = useState(true);
+  const [form, setForm] = useState({ name: "", email: "", password: "" });
+
+  useEffect(() => {
+    if (!token) {
+      setUser(null);
+      setIsAdmin(false);
+      return;
+    }
+
+    localStorage.setItem("token", token);
+
+    axios
+      .get(`${API}/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      .then((res) => {
+        setUser(res.data.user);
+        setIsAdmin(false);
+      })
+      .catch(() => {
+        setToken("");
+        setUser(null);
+        setIsAdmin(false);
+        localStorage.removeItem("token");
+      });
+  }, [token]);
+
+  function handleAuthSubmit(e) {
+    e.preventDefault();
+
+    if (!showLoginForm) {
+      axios
+        .post(`${API}/admin/login`, { email: form.email, password: form.password })
+        .then((res) => {
+          setToken(res.data.token);
+          setUser(res.data.admin);
+          setIsAdmin(true);
+          setForm({ name: "", email: "", password: "" });
+          setMessage("Admin login successful!");
+        })
+        .catch((err) => {
+          setMessage(err.response?.data?.message || "Admin login failed");
+        });
+    } else {
+      const url = authMode === "register" ? "/register" : "/login";
+
+      axios
+        .post(`${API}${url}`, form)
+        .then((res) => {
+          setToken(res.data.token);
+          setUser(res.data.user);
+          setForm({ name: "", email: "", password: "" });
+          setMessage(authMode === "register" ? "Account created!" : "Login successful!");
+        })
+        .catch((err) => {
+          setMessage(err.response?.data?.message || "Authentication failed");
+        });
+    }
+  }
+
+  function logout() {
+    setToken("");
+    setUser(null);
+    setIsAdmin(false);
+    setMessage("");
+    localStorage.removeItem("token");
+  }
+
+  if (!user) {
+    return (
+      <div className="auth-screen">
+        <div className="auth-box">
+          {showLoginForm ? (
+            <>
+              <h2>{authMode === "login" ? "Login" : "Register"}</h2>
+              <div className="switcher">
+                <button className={authMode === "login" ? "active" : ""} onClick={() => setAuthMode("login")}>Login</button>
+                <button className={authMode === "register" ? "active" : ""} onClick={() => setAuthMode("register")}>Register</button>
+              </div>
+            </>
+          ) : (
+            <h2>Admin Login</h2>
+          )}
+
+          <form onSubmit={handleAuthSubmit}>
+            {showLoginForm && authMode === "register" && (
+              <input type="text" placeholder="Full name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+            )}
+
+            <input type="email" placeholder="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+            <input type="password" placeholder="Password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+
+            <button type="submit">{showLoginForm ? (authMode === "login" ? "Log In" : "Create Account") : "Admin Login"}</button>
+          </form>
+
+          {message && <p className="message">{message}</p>}
+
+          <div className="auth-switch">
+            {showLoginForm ? (
+              <button onClick={() => setShowLoginForm(false)} className="link-btn">→ Admin Login</button>
+            ) : (
+              <button onClick={() => setShowLoginForm(true)} className="link-btn">← Back to User Login</button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (isAdmin) return <Admin token={token} user={user} logout={logout} />;
+  return <Mail token={token} user={user} logout={logout} />;
+}
+
